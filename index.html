@@ -280,8 +280,13 @@
         let chatCooldownTimeout = null;
         let chatFillAnim = null;
 
-        // Default random anon tag (in-memory)
-        let displayName = `anon#${Math.floor(100 + Math.random() * 900)}`;
+        // Keep the display name (including the generated anon tag) across refreshes.
+        const DISPLAY_NAME_STORAGE_KEY = 'vote-display-name';
+        let displayName = localStorage.getItem(DISPLAY_NAME_STORAGE_KEY);
+        if (!displayName) {
+            displayName = `anon#${Math.floor(100 + Math.random() * 900)}`;
+            localStorage.setItem(DISPLAY_NAME_STORAGE_KEY, displayName);
+        }
 
         // Bar elements / running animations (Web Animations API — no layout thrash)
         const barEls = new Map();    // emoticon -> bar element
@@ -334,7 +339,7 @@
 
                 // Responsive Square Grid
                 const grid = document.createElement('div');
-                grid.className = 'grid grid-cols-3 sm:grid-cols-5 gap-2.5';
+                grid.className = 'grid grid-cols-5 sm:grid-cols-7 gap-2.5';
 
                 category.items.forEach(emoticon => {
                     const safeId = encodeEmoticonId(emoticon);
@@ -649,6 +654,7 @@
             nameInput.addEventListener('input', (e) => {
                 const cleaned = e.target.value.trim();
                 displayName = cleaned.length > 0 ? cleaned : 'anon';
+                localStorage.setItem(DISPLAY_NAME_STORAGE_KEY, displayName);
             });
 
             // Listen to latest 50 messages in real time
