@@ -27,6 +27,9 @@
         .emoticon-square:active {
             transform: scale(0.95);
         }
+        .emoticon-label {
+            white-space: nowrap;
+        }
 
         /* ---------- Cooldown bars (bottom → top, compositor-only) ---------- */
         /* Both bars animate `transform` only, so no layout/paint thrash. */
@@ -229,7 +232,7 @@
             {
                 id: 'happy',
                 label: 'happy',
-                items: [':)', ';)', ':>', ':p', ':P', ':D', ':d', ':o', ':O', ':0', ':]', ':}', ':v', ':q']
+                items: [':)', ';)', ':>', ':p', ':P', ':D', ':d', ':o', ':O', ':0', ':]', ':}', ':v', ':q', ':3']
             },
             {
                 id: 'other',
@@ -240,6 +243,11 @@
                 id: 'sad',
                 label: 'sad',
                 items: [':(', ':<', ':[', ':{']
+            },
+            {
+                id: 'unusual',
+                label: 'unusual',
+                items: ['owo','o_o', '._.']
             }
         ];
 
@@ -292,6 +300,60 @@
         const barEls = new Map();    // emoticon -> bar element
         const barAnims = new Map();  // emoticon -> Animation
         const barTargets = new Map();// emoticon -> readyAt the bar is currently showing
+        const emoticonLabelEls = new Map(); // emoticon -> label element
+
+        // ---------- Label fitting ----------
+let fitObserver = null;
+let fitScheduled = false;
+
+function fitEmoticonLabels() {
+    fitScheduled = false;
+
+    const baseSize = window.matchMedia('(min-width: 640px)').matches ? 20 : 18;
+    const MIN_SIZE = 9; // never crush below this
+
+    const items = [];
+    document.querySelectorAll('#categories-root .emoticon-square').forEach(btn => {
+        const label = btn.querySelector('.emoticon-label');
+        if (label) items.push({ btn, label });
+    });
+    if (!items.length) return;
+
+    // 1) reset every label to base size (one write pass)
+    for (const { label } of items) label.style.fontSize = `${baseSize}px`;
+
+    // 2) read real metrics + decide sizes
+    const sizes = items.map(({ btn, label }) => {
+        if (btn.clientWidth < 8) return baseSize; // not laid out yet — leave it alone
+        const cs = getComputedStyle(btn);
+        const available =
+            btn.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+        const natural = label.offsetWidth; // real DOM width, real font fallback
+        if (available <= 0 || !natural) return baseSize;
+        if (natural <= available) return baseSize; // fits at full size
+        return Math.max(MIN_SIZE, Math.floor(baseSize * available / natural));
+    });
+
+    // 3) apply (second write pass — avoids read/write thrash)
+    items.forEach(({ label }, i) => { label.style.fontSize = `${sizes[i]}px`; });
+}
+
+function scheduleFit() {
+    if (fitScheduled) return;
+    fitScheduled = true;
+    // Double rAF: by the second frame the CDN stylesheet + fonts are applied.
+    requestAnimationFrame(() => requestAnimationFrame(fitEmoticonLabels));
+}
+
+function observeGridFit() {
+    const root = document.getElementById('categories-root');
+    if (!root) return;
+    if (fitObserver) fitObserver.disconnect();
+    fitObserver = new ResizeObserver(scheduleFit);
+    fitObserver.observe(root); // fires once immediately, then on every size change
+}
+
+        
 
         // Gentle easing used by every cooldown bar ("slight ease cuz why not")
         const BAR_EASE = 'cubic-bezier(0.25, 0.1, 0.25, 1)';
@@ -322,6 +384,7 @@
             barEls.clear();
             barAnims.clear();
             barTargets.clear();
+            emoticonLabelEls.clear();
 
             CATEGORIES.forEach(category => {
                 const section = document.createElement('section');
@@ -351,7 +414,7 @@
 
                     btn.innerHTML = `
                         <span class="vote-bar"></span>
-                        <span class="relative z-10 text-lg sm:text-xl font-medium text-neutral-900 tracking-tight group-hover:scale-105 transition-transform">
+                        <span class="emoticon-label relative z-10 font-medium text-neutral-900 tracking-tight group-hover:scale-105 transition-transform">
                             ${escapeHtml(emoticon)}
                         </span>
                         <span id="count-${safeId}" class="count-slot absolute bottom-2 left-0 right-0 z-10 text-[11px] text-neutral-400 group-hover:text-neutral-700 font-normal">
@@ -360,6 +423,7 @@
                     `;
 
                     barEls.set(emoticon, btn.querySelector('.vote-bar'));
+                    emoticonLabelEls.set(emoticon, btn.querySelector('.emoticon-label'));
                     btn.addEventListener('click', () => handleVote(emoticon, safeId, btn));
                     grid.appendChild(btn);
                 });
@@ -367,6 +431,16 @@
                 section.appendChild(grid);
                 root.appendChild(section);
             });
+
+            
+                        fitEmoticonLabels(); // cheap first pass
+            observeGridFit();    // initial callback + all future size changes
+
+            // Re-fit once webfont metrics are known (works even if fonts
+            // already resolved before the grid existed).
+            if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(scheduleFit);
+            }
         }
 
         // ---------- Rolling number helper ----------
@@ -811,14 +885,15 @@
 
         // 11. Initialization
         async function initApp() {
-            renderGrid();
+            
+                        renderGrid();
             initChat();
             initChatDrawer();
             updateVoteBars();
-
+            scheduleFit();   // was: fitEmoticonLabels()
             // Initial fetch immediately on load
             await fetchVotesFromRTDB();
-
+            
             // Refresh vote totals every 5 seconds
             if (pollIntervalId) clearInterval(pollIntervalId);
             pollIntervalId = setInterval(fetchVotesFromRTDB, 5000);
