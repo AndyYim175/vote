@@ -114,7 +114,7 @@
         <header class="mb-8 border-b border-neutral-200 pb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
                 <h1 class="text-xl sm:text-2xl font-medium tracking-tight text-neutral-900">
-                    pick your favourite :)
+                    pick your favourite emoji char!
                 </h1>
                 <p class="text-xs sm:text-sm text-neutral-500 mt-1">
                     click any square to vote. <span id="total-votes" class="text-neutral-700 font-medium">0 total</span>
@@ -469,7 +469,7 @@
                 } else {
                     const topPick = votedEntries.sort((a, b) => b[1] - a[1])[0];
                     const totalSession = votedEntries.reduce((sum, [, c]) => sum + c, 0);
-                    summaryEl.textContent = `you cast ${totalSession} vote${totalSession === 1 ? '' : 's'} (top: ${topPick[0]})`;
+                    summaryEl.textContent = `you casted ${totalSession} vote${totalSession === 1 ? '' : 's'} (top: ${topPick[0]})`;
                 }
             }
         }
