@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>:) — vote</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- JetBrains Mono & Inter for crisp plain-text aesthetic -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: #fafafa;
+            color: #171717;
+            -webkit-font-smoothing: antialiased;
+        }
+        /* Minimalist square card styling: plain text priority over heavy UI */
+        .emoticon-square {
+            aspect-ratio: 1 / 1;
+            transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1), background-color 0.15s ease, border-color 0.15s ease;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .emoticon-square:active {
+            transform: scale(0.95);
+        }
+
+        /* ---------- Cooldown bars (bottom → top, compositor-only) ---------- */
+        /* Both bars animate `transform` only, so no layout/paint thrash. */
+        .vote-bar,
+        .chat-cooldown-fill {
+            will-change: transform;
+            transform-origin: bottom center;
+            transform: scaleY(0);
+        }
+        .vote-bar {
+            position: absolute;
+            inset: 0;
+            background-color: rgba(229, 229, 229, 0.85); /* neutral-200 */
+            pointer-events: none;
+        }
+
+        /* ---------- Rolling counter ---------- */
+        /* A tiny stacked grid: all values share one cell, so width is the
+           widest of them and vertical motion is clipped cleanly. */
+        .count-slot {
+            display: grid;
+            height: 1.15em;
+            line-height: 1.15em;
+            overflow: hidden;
+        }
+        .count-slot > .count-value {
+            grid-area: 1 / 1;
+            text-align: center;
+            white-space: nowrap;
+            line-height: 1.15em;
+            will-change: transform;
+        }
+
+        /* ---------- Chat panel: drawer on mobile, sidebar on desktop ---------- */
+        #chat-panel {
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            right: 0;
+            z-index: 50;
+            width: 88vw;
+            max-width: 24rem;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background: #ffffff;
+            border-left: 1px solid #e5e5e5;
+            border-radius: 0;
+            box-shadow: -8px 0 24px rgba(0, 0, 0, 0.06);
+            transform: translateX(100%);
+            visibility: hidden;
+            transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1), visibility 0s linear 0.22s;
+        }
+        #chat-panel.open {
+            transform: translateX(0);
+            visibility: visible;
+            transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1), visibility 0s linear 0s;
+        }
+        @media (min-width: 1024px) {
+            #chat-panel {
+                position: sticky;
+                top: 2rem;
+                bottom: auto;
+                right: auto;
+                z-index: auto;
+                width: 100%;
+                max-width: none;
+                height: 460px;
+                border: 1px solid #e5e5e5;
+                border-radius: 0.375rem;
+                box-shadow: none;
+                transform: none;
+                visibility: visible;
+                transition: none;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center selection:bg-neutral-900 selection:text-white">
+
+    <!-- Main Container: Responsive 2-column layout (Voting on left, Chat on right) -->
+    <main class="w-full max-w-6xl px-4 sm:px-6 py-8 sm:py-12 flex-1 flex flex-col">
+
+        <!-- Header: Pure Plain Text Vibe + Top-Right Display Name -->
+        <header class="mb-8 border-b border-neutral-200 pb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+                <h1 class="text-xl sm:text-2xl font-medium tracking-tight text-neutral-900">
+                    pick your favourite :)
+                </h1>
+                <p class="text-xs sm:text-sm text-neutral-500 mt-1">
+                    click any square to vote. <span id="total-votes" class="text-neutral-700 font-medium">0 total</span>
+                </p>
+            </div>
+
+            <!-- Top Right: Editable Display Name -->
+            <div class="flex items-center gap-2 self-start sm:self-auto">
+                <label for="display-name-input" class="text-xs text-neutral-400">as:</label>
+                <input
+                    id="display-name-input"
+                    type="text"
+                    maxlength="18"
+                    placeholder="anon"
+                    class="w-32 sm:w-36 px-2.5 py-1.5 text-xs bg-white border border-neutral-200 rounded-md text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-neutral-900 transition-colors"
+                />
+            </div>
+        </header>
+
+        <!-- Content Split: Left Voting Grid | Right Live Chat -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start flex-1">
+
+            <!-- Left Column: Emoticon Categories -->
+            <div id="categories-root" class="lg:col-span-7 space-y-10">
+                <!-- Dynamically populated by JS -->
+            </div>
+
+            <!-- Right Column: Minimalist Plain-Text Global Chat (drawer on mobile) -->
+            <aside id="chat-panel" class="lg:col-span-5">
+                <!-- Chat Header -->
+                <div class="px-4 py-3 border-b border-neutral-200 flex items-center justify-between">
+                    <span class="text-xs uppercase tracking-widest text-neutral-500 font-semibold">chat</span>
+                    <div class="flex items-center gap-3">
+                        <span id="chat-count" class="text-[11px] text-neutral-400">0/50</span>
+                        <button
+                            id="chat-close"
+                            type="button"
+                            aria-label="Close chat"
+                            class="lg:hidden text-neutral-400 hover:text-neutral-900 text-lg leading-none px-1 transition-colors"
+                        >×</button>
+                    </div>
+                </div>
+
+                <!-- Messages Feed -->
+                <div id="chat-messages" class="flex-1 overflow-y-auto px-4 py-3 space-y-2.5 text-xs break-words">
+                    <div class="text-neutral-400 text-center py-8">loading messages...</div>
+                </div>
+
+                <!-- Chat Input Form -->
+                <form id="chat-form" class="p-3 border-t border-neutral-200 flex gap-2">
+                    <!-- Cooldown bar lives inside the text box, behind the typed text -->
+                    <div class="relative flex-1 min-w-0 rounded-md border border-neutral-200 bg-neutral-50 overflow-hidden transition-colors focus-within:border-neutral-900 focus-within:bg-white">
+                        <div id="chat-cooldown-fill" class="chat-cooldown-fill absolute inset-0 bg-neutral-200/70 pointer-events-none"></div>
+                        <input
+                            id="chat-input"
+                            type="text"
+                            maxlength="140"
+                            placeholder="say something :) ..."
+                            autocomplete="off"
+                            class="relative w-full px-3 py-2 text-xs bg-transparent text-neutral-900 placeholder-neutral-400 focus:outline-none"
+                        />
+                    </div>
+                    <button
+                        id="chat-send-btn"
+                        type="submit"
+                        class="px-3.5 py-2 text-xs font-medium bg-neutral-900 text-white rounded-md hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors shrink-0"
+                    >
+                        send
+                    </button>
+                </form>
+            </aside>
+
+        </div>
+
+    </main>
+
+    <!-- Minimal Footer -->
+    <footer class="w-full max-w-6xl px-4 sm:px-6 py-6 border-t border-neutral-200 text-xs text-neutral-400 flex flex-wrap justify-between items-center gap-4">
+        <span>made by andy175 ;)</span>
+        <span id="user-vote-summary">no votes cast this session</span>
+    </footer>
+
+    <!-- Mobile: floating button that opens the chat drawer -->
+    <button
+        id="chat-toggle"
+        type="button"
+        aria-label="Open chat"
+        class="lg:hidden fixed bottom-5 right-5 z-40 flex items-center gap-2 px-4 py-2.5 text-xs font-medium bg-neutral-900 text-white rounded-full shadow-sm active:scale-95 transition-transform"
+    >
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+        chat
+    </button>
+
+    <!-- Mobile: backdrop behind the drawer -->
+    <div
+        id="chat-backdrop"
+        class="lg:hidden fixed inset-0 z-40 bg-neutral-900/30 opacity-0 pointer-events-none transition-opacity duration-200"
+    ></div>
+
+    <!-- Subtle Toast / Notification (No alert() used) -->
+    <div id="toast" class="fixed bottom-20 right-5 lg:bottom-5 bg-neutral-900 text-neutral-50 text-xs px-3.5 py-2 rounded opacity-0 pointer-events-none transition-opacity duration-200 shadow-sm z-50">
+        voted
+    </div>
+
+    <!-- Firebase SDK (Modular v11.6.1) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getDatabase, ref, get, runTransaction, push, onValue, query, limitToLast, remove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
+
+        // 1. Emoticon Data Definitions
+        const CATEGORIES = [
+            {
+                id: 'happy',
+                label: 'happy',
+                items: [':)', ';)', ':>', ':p', ':P', ':D', ':d', ':o', ':O', ':0', ':]', ':}', ':v', ':q']
+            },
+            {
+                id: 'other',
+                label: 'other',
+                items: [':|', ':I', ':1', ':3', ':/', ':\\', ':!', '?_?', ':7', ':#']
+            },
+            {
+                id: 'sad',
+                label: 'sad',
+                items: [':(', ':<', ':[', ':{']
+            }
+        ];
+
+        // 2. Your Firebase Realtime Database Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyAZhY6SSMZDbRk2Kj76HVEvUYgpKx_GOqg",
+            authDomain: "vote-47e9f.firebaseapp.com",
+            databaseURL: "https://vote-47e9f-default-rtdb.firebaseio.com",
+            projectId: "vote-47e9f",
+            storageBucket: "vote-47e9f.firebasestorage.app",
+            messagingSenderId: "741953131520",
+            appId: "1:741953131520:web:e8718f47ccbac354f634e5",
+            measurementId: "G-G3FJXWNQ1R"
+        };
+
+        // Initialize Firebase & Realtime Database
+        const app = initializeApp(firebaseConfig);
+        const rtdb = getDatabase(app);
+        const votesRootRef = ref(rtdb, 'emoticon_votes');
+        const chatRootRef = ref(rtdb, 'global_chat');
+
+        // 3. Application State & Cooldowns
+        let voteCounts = {};    // emoticon -> count
+        let sessionVotes = {};  // emoticon -> votes this session
+        let isOfflineMode = false;
+        let pollIntervalId = null;
+
+        // Voting cooldowns
+        const VOTE_COOLDOWN_MS = 2000;   // between ANY two votes
+        const EMOJI_COOLDOWN_MS = 8000;  // between two votes on the SAME emoticon
+        let globalVoteReadyAt = 0;
+        const emojiReadyAt = new Map();  // emoticon -> timestamp when votable again
+
+        // Chat cooldowns
+        const CHAT_COOLDOWN_MS = 5000;
+        const MAX_CHAT_MESSAGES = 50;
+        let lastChatTimestamp = 0;
+        let chatCooldownTimeout = null;
+        let chatFillAnim = null;
+
+        // Default random anon tag (in-memory)
+        let displayName = `anon#${Math.floor(100 + Math.random() * 900)}`;
+
+        // Bar elements / running animations (Web Animations API — no layout thrash)
+        const barEls = new Map();    // emoticon -> bar element
+        const barAnims = new Map();  // emoticon -> Animation
+        const barTargets = new Map();// emoticon -> readyAt the bar is currently showing
+
+        // Gentle easing used by every cooldown bar ("slight ease cuz why not")
+        const BAR_EASE = 'cubic-bezier(0.25, 0.1, 0.25, 1)';
+
+        // Helper to create safe Realtime DB keys from symbols
+        function encodeEmoticonId(emoticon) {
+            return Array.from(emoticon)
+                .map(char => char.charCodeAt(0).toString(16).padStart(4, '0'))
+                .join('_');
+        }
+
+        // Decode hex key back to emoticon string
+        function decodeEmoticonId(encodedId) {
+            try {
+                return encodedId
+                    .split('_')
+                    .map(hex => String.fromCharCode(parseInt(hex, 16)))
+                    .join('');
+            } catch {
+                return null;
+            }
+        }
+
+        // 4. UI Rendering
+        function renderGrid() {
+            const root = document.getElementById('categories-root');
+            root.innerHTML = '';
+            barEls.clear();
+            barAnims.clear();
+            barTargets.clear();
+
+            CATEGORIES.forEach(category => {
+                const section = document.createElement('section');
+
+                // Category Header
+                const header = document.createElement('div');
+                header.className = 'flex items-baseline justify-between mb-3.5';
+                header.innerHTML = `
+                    <h2 class="text-xs uppercase tracking-widest text-neutral-400 font-semibold">${category.label}</h2>
+                    <span class="count-slot text-xs text-neutral-400" id="cat-total-${category.id}">
+                        <span class="count-value">0</span>
+                    </span>
+                `;
+                section.appendChild(header);
+
+                // Responsive Square Grid
+                const grid = document.createElement('div');
+                grid.className = 'grid grid-cols-3 sm:grid-cols-5 gap-2.5';
+
+                category.items.forEach(emoticon => {
+                    const safeId = encodeEmoticonId(emoticon);
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.id = `btn-${safeId}`;
+                    btn.className = 'emoticon-square group relative overflow-hidden flex flex-col items-center justify-center bg-white border border-neutral-200 hover:border-neutral-900 hover:bg-neutral-50 rounded-md p-2 focus:outline-none focus:ring-1 focus:ring-neutral-900';
+                    btn.setAttribute('aria-label', `Vote for ${emoticon}`);
+
+                    btn.innerHTML = `
+                        <span class="vote-bar"></span>
+                        <span class="relative z-10 text-lg sm:text-xl font-medium text-neutral-900 tracking-tight group-hover:scale-105 transition-transform">
+                            ${escapeHtml(emoticon)}
+                        </span>
+                        <span id="count-${safeId}" class="count-slot absolute bottom-2 left-0 right-0 z-10 text-[11px] text-neutral-400 group-hover:text-neutral-700 font-normal">
+                            <span class="count-value">0</span>
+                        </span>
+                    `;
+
+                    barEls.set(emoticon, btn.querySelector('.vote-bar'));
+                    btn.addEventListener('click', () => handleVote(emoticon, safeId, btn));
+                    grid.appendChild(btn);
+                });
+
+                section.appendChild(grid);
+                root.appendChild(section);
+            });
+        }
+
+        // ---------- Rolling number helper ----------
+        // Old value slides down out of the slot, new value slides in from above.
+        function rollCount(slot, newText) {
+            if (!slot) return;
+
+            const values = slot.querySelectorAll('.count-value');
+            const current = values.length ? values[values.length - 1] : null;
+
+            if (current && current.textContent === newText) return;
+
+            // Clean up any leftovers from a previous overlapping roll
+            for (let i = 0; i < values.length - 1; i++) {
+                values[i].getAnimations().forEach(a => a.cancel());
+                values[i].remove();
+            }
+
+            if (!current) {
+                const v = document.createElement('span');
+                v.className = 'count-value';
+                v.textContent = newText;
+                slot.appendChild(v);
+                return;
+            }
+
+            // If the slot has no layout (hidden), just swap the text
+            if (!slot.offsetHeight) {
+                current.textContent = newText;
+                return;
+            }
+
+            current.getAnimations().forEach(a => a.cancel());
+
+            const incoming = document.createElement('span');
+            incoming.className = 'count-value';
+            incoming.textContent = newText;
+            slot.appendChild(incoming);
+
+            const timing = { duration: 260, easing: 'cubic-bezier(0.33, 0, 0.15, 1)' };
+
+            const outAnim = current.animate(
+                [{ transform: 'translateY(0%)' }, { transform: 'translateY(100%)' }],
+                timing
+            );
+            const inAnim = incoming.animate(
+                [{ transform: 'translateY(-100%)' }, { transform: 'translateY(0%)' }],
+                timing
+            );
+
+            outAnim.onfinish = () => {
+                outAnim.cancel();
+                current.remove();
+            };
+            inAnim.onfinish = () => {
+                inAnim.cancel(); // base transform is translateY(0) — no flicker
+            };
+        }
+
+        function updateAllCountsUI() {
+            let grandTotal = 0;
+
+            CATEGORIES.forEach(category => {
+                let categoryTotal = 0;
+                category.items.forEach(emoticon => {
+                    const count = voteCounts[emoticon] || 0;
+                    categoryTotal += count;
+                    grandTotal += count;
+
+                    const safeId = encodeEmoticonId(emoticon);
+                    const countEl = document.getElementById(`count-${safeId}`);
+                    const btnEl = document.getElementById(`btn-${safeId}`);
+
+                    if (countEl) {
+                        rollCount(countEl, count.toLocaleString());
+                    }
+                    if (btnEl && sessionVotes[emoticon]) {
+                        btnEl.classList.add('border-neutral-900', 'bg-neutral-50');
+                        btnEl.classList.remove('border-neutral-200', 'bg-white');
+                    }
+                });
+
+                const catTotalEl = document.getElementById(`cat-total-${category.id}`);
+                if (catTotalEl) {
+                    rollCount(catTotalEl, categoryTotal.toLocaleString());
+                }
+            });
+
+            const totalEl = document.getElementById('total-votes');
+            if (totalEl) {
+                totalEl.textContent = `${grandTotal.toLocaleString()} total`;
+            }
+
+            // Update session footer summary
+            const summaryEl = document.getElementById('user-vote-summary');
+            const votedEntries = Object.entries(sessionVotes);
+            if (summaryEl) {
+                if (votedEntries.length === 0) {
+                    summaryEl.textContent = 'no votes cast this session';
+                } else {
+                    const topPick = votedEntries.sort((a, b) => b[1] - a[1])[0];
+                    const totalSession = votedEntries.reduce((sum, [, c]) => sum + c, 0);
+                    summaryEl.textContent = `you cast ${totalSession} vote${totalSession === 1 ? '' : 's'} (top: ${topPick[0]})`;
+                }
+            }
+        }
+
+        let toastTimeout;
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.textContent = message;
+            toast.classList.remove('opacity-0');
+            toast.classList.add('opacity-100');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.remove('opacity-100');
+                toast.classList.add('opacity-0');
+            }, 1400);
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // 5. Vote cooldown bars — vertical, bottom-anchored, gently eased.
+        // Pure compositor animations: no timers, no reflows, no jank.
+        function updateVoteBars(now = Date.now()) {
+            CATEGORIES.forEach(category => {
+                category.items.forEach(emoticon => {
+                    const bar = barEls.get(emoticon);
+                    if (!bar) return;
+
+                    // An emoticon becomes votable again once BOTH the global
+                    // 2s cooldown and its own 8s cooldown have elapsed.
+                    const readyAt = Math.max(emojiReadyAt.get(emoticon) || 0, globalVoteReadyAt);
+
+                    // Nothing changed for this bar — leave the running
+                    // animation alone so it never restarts/jumps.
+                    if (barTargets.get(emoticon) === readyAt) return;
+                    barTargets.set(emoticon, readyAt);
+
+                    const prev = barAnims.get(emoticon);
+                    if (prev) {
+                        prev.cancel();
+                        barAnims.delete(emoticon);
+                    }
+
+                    const remaining = readyAt - now;
+
+                    if (remaining > 0) {
+                        const anim = bar.animate(
+                            [{ transform: 'scaleY(1)' }, { transform: 'scaleY(0)' }],
+                            { duration: remaining, easing: BAR_EASE, fill: 'forwards' }
+                        );
+                        anim.onfinish = () => {
+                            anim.cancel(); // snaps back to base scaleY(0)
+                            if (barAnims.get(emoticon) === anim) barAnims.delete(emoticon);
+                        };
+                        barAnims.set(emoticon, anim);
+                    } else {
+                        bar.style.transform = 'scaleY(0)';
+                    }
+                });
+            });
+        }
+
+        // 6. Voting Action — 2s between votes, 8s per emoticon
+        async function handleVote(emoticon, safeId, btnElement) {
+            const now = Date.now();
+            const readyAt = Math.max(emojiReadyAt.get(emoticon) || 0, globalVoteReadyAt);
+
+            if (now < readyAt) {
+                showToast(`wait ${((readyAt - now) / 1000).toFixed(1)}s`);
+                return;
+            }
+
+            // Arm both cooldowns
+            globalVoteReadyAt = now + VOTE_COOLDOWN_MS;
+            emojiReadyAt.set(emoticon, now + EMOJI_COOLDOWN_MS);
+
+            // Optimistic UI update
+            voteCounts[emoticon] = (voteCounts[emoticon] || 0) + 1;
+            sessionVotes[emoticon] = (sessionVotes[emoticon] || 0) + 1;
+
+            // Subtle pop (Web Animations API — no forced reflow)
+            btnElement.animate(
+                [
+                    { transform: 'scale(1)' },
+                    { transform: 'scale(1.06)' },
+                    { transform: 'scale(1)' }
+                ],
+                { duration: 220, easing: 'ease-out' }
+            );
+
+            updateVoteBars(now);
+            updateAllCountsUI();
+            showToast(`+1 for ${emoticon}`);
+
+            if (isOfflineMode) return;
+
+            try {
+                const itemRef = ref(rtdb, `emoticon_votes/${safeId}`);
+                await runTransaction(itemRef, (currentData) => {
+                    if (currentData === null) {
+                        return {
+                            emoticon: emoticon,
+                            votes: 1,
+                            updatedAt: Date.now()
+                        };
+                    }
+                    return {
+                        ...currentData,
+                        emoticon: emoticon,
+                        votes: (currentData.votes || 0) + 1,
+                        updatedAt: Date.now()
+                    };
+                });
+            } catch (err) {
+                console.error("Failed to sync vote to Realtime DB:", err);
+            }
+        }
+
+        // 7. Fetch Votes from Realtime Database (Polled every 5 seconds)
+        async function fetchVotesFromRTDB() {
+            try {
+                const snapshot = await get(votesRootRef);
+                isOfflineMode = false;
+
+                if (snapshot.exists()) {
+                    const data = snapshot.val();
+                    Object.entries(data).forEach(([safeId, entry]) => {
+                        const emoticon = (entry && typeof entry.emoticon === 'string')
+                            ? entry.emoticon
+                            : decodeEmoticonId(safeId);
+                        const votes = (entry && typeof entry.votes === 'number')
+                            ? entry.votes
+                            : (typeof entry === 'number' ? entry : 0);
+
+                        if (emoticon) {
+                            voteCounts[emoticon] = votes;
+                        }
+                    });
+                }
+                updateAllCountsUI();
+            } catch (error) {
+                console.warn("Realtime DB fetch warning:", error);
+                isOfflineMode = true;
+            }
+        }
+
+        // 8. Link detection — links are not allowed in chat
+        function containsLink(text) {
+            const t = text.toLowerCase();
+
+            // Explicit protocol / www / protocol-relative
+            if (/(https?:\/\/|ftp:\/\/|www\.|\/\/)/.test(t)) return true;
+
+            // Bare domain-ish: something.tld (tld = 2+ letters)
+            if (/[a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)*\.[a-z]{2,24}(\b|\/)/.test(t)) return true;
+
+            // Obfuscated: "example dot com", "example[dot]com"
+            if (/[a-z0-9-]+\s*(\(dot\)|\[dot\]|\sdot\s)\s*(com|net|org|io|gg|ly|co|me|dev|app|xyz|tv|info|site|link)\b/.test(t)) return true;
+
+            return false;
+        }
+
+        // 9. Live Global Chat (real-time, max 50 msgs, 5s cooldown bar on the input)
+        function initChat() {
+            const nameInput = document.getElementById('display-name-input');
+            const chatForm = document.getElementById('chat-form');
+            const chatInput = document.getElementById('chat-input');
+            const chatSendBtn = document.getElementById('chat-send-btn');
+            const chatMessagesEl = document.getElementById('chat-messages');
+            const chatCountEl = document.getElementById('chat-count');
+            const chatFillEl = document.getElementById('chat-cooldown-fill');
+
+            // Initialize display name input
+            nameInput.value = displayName;
+            nameInput.addEventListener('input', (e) => {
+                const cleaned = e.target.value.trim();
+                displayName = cleaned.length > 0 ? cleaned : 'anon';
+            });
+
+            // Listen to latest 50 messages in real time
+            const recentChatQuery = query(chatRootRef, limitToLast(MAX_CHAT_MESSAGES));
+            onValue(recentChatQuery, (snapshot) => {
+                const wasNearBottom =
+                    chatMessagesEl.scrollHeight - chatMessagesEl.scrollTop - chatMessagesEl.clientHeight < 60;
+
+                chatMessagesEl.innerHTML = '';
+
+                if (!snapshot.exists()) {
+                    chatMessagesEl.innerHTML = '<div class="text-neutral-400 text-center py-8">no messages yet. say :)</div>';
+                    chatCountEl.textContent = `0/${MAX_CHAT_MESSAGES}`;
+                    return;
+                }
+
+                const entries = [];
+                snapshot.forEach((childSnap) => {
+                    entries.push({ key: childSnap.key, ...childSnap.val() });
+                });
+
+                chatCountEl.textContent = `${entries.length}/${MAX_CHAT_MESSAGES}`;
+
+                entries.forEach((msg) => {
+                    const row = document.createElement('div');
+                    row.className = 'leading-relaxed';
+
+                    const timeStr = msg.ts
+                        ? new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : '';
+
+                    row.innerHTML = `
+                        <span class="text-neutral-400 text-[10px] mr-1.5">${escapeHtml(timeStr)}</span>
+                        <span class="font-semibold text-neutral-900">${escapeHtml(msg.name || 'anon')}:</span>
+                        <span class="text-neutral-700">${escapeHtml(msg.text || '')}</span>
+                    `;
+                    chatMessagesEl.appendChild(row);
+                });
+
+                if (wasNearBottom || entries.length <= 15) {
+                    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+                }
+            }, (error) => {
+                console.warn("Chat listener warning:", error);
+                chatMessagesEl.innerHTML = '<div class="text-neutral-400 text-center py-8">chat unavailable</div>';
+            });
+
+            // Cooldown bar: fills the text box from the bottom up over 5s.
+            function startChatCooldown() {
+                chatSendBtn.disabled = true;
+
+                if (chatFillAnim) {
+                    chatFillAnim.cancel();
+                    chatFillAnim = null;
+                }
+                chatFillAnim = chatFillEl.animate(
+                    [{ transform: 'scaleY(0)' }, { transform: 'scaleY(1)' }],
+                    { duration: CHAT_COOLDOWN_MS, easing: BAR_EASE, fill: 'forwards' }
+                );
+
+                clearTimeout(chatCooldownTimeout);
+                chatCooldownTimeout = setTimeout(() => {
+                    chatSendBtn.disabled = false;
+                    if (chatFillAnim) {
+                        chatFillAnim.cancel(); // resets to scaleY(0) -> bar hidden
+                        chatFillAnim = null;
+                    }
+                }, CHAT_COOLDOWN_MS);
+            }
+
+            // Handle sending a message
+            chatForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const text = chatInput.value.trim();
+                if (!text) return;
+
+                // Enforce cooldown (covers Enter-key submission too)
+                const now = Date.now();
+                const elapsed = now - lastChatTimestamp;
+                if (elapsed < CHAT_COOLDOWN_MS) {
+                    showToast(`chat cooldown: ${Math.ceil((CHAT_COOLDOWN_MS - elapsed) / 1000)}s`);
+                    return;
+                }
+
+                // No links allowed
+                if (containsLink(text)) {
+                    showToast('no links allowed :(');
+                    return;
+                }
+
+                lastChatTimestamp = now;
+                chatInput.value = '';
+                startChatCooldown();
+
+                try {
+                    await push(chatRootRef, {
+                        name: displayName.slice(0, 18),
+                        text: text.slice(0, 140),
+                        ts: Date.now()
+                    });
+
+                    // Enforce max 50 messages in DB by trimming oldest overflow
+                    const allSnap = await get(chatRootRef);
+                    if (allSnap.exists()) {
+                        const keys = Object.keys(allSnap.val());
+                        if (keys.length > MAX_CHAT_MESSAGES) {
+                            const excessKeys = keys.slice(0, keys.length - MAX_CHAT_MESSAGES);
+                            await Promise.all(
+                                excessKeys.map(k => remove(ref(rtdb, `global_chat/${k}`)))
+                            );
+                        }
+                    }
+                } catch (err) {
+                    console.error("Failed to send chat message:", err);
+                    showToast('failed to send');
+                }
+            });
+        }
+
+        // 10. Mobile chat drawer (small screens only; sidebar stays on desktop)
+        function initChatDrawer() {
+            const panel = document.getElementById('chat-panel');
+            const backdrop = document.getElementById('chat-backdrop');
+            const toggleBtn = document.getElementById('chat-toggle');
+            const closeBtn = document.getElementById('chat-close');
+
+            const open = () => {
+                panel.classList.add('open');
+                backdrop.classList.remove('opacity-0', 'pointer-events-none');
+                backdrop.classList.add('opacity-100', 'pointer-events-auto');
+                document.body.style.overflow = 'hidden';
+            };
+
+            const close = () => {
+                panel.classList.remove('open');
+                backdrop.classList.add('opacity-0', 'pointer-events-none');
+                backdrop.classList.remove('opacity-100', 'pointer-events-auto');
+                document.body.style.overflow = '';
+            };
+
+            toggleBtn.addEventListener('click', open);
+            closeBtn.addEventListener('click', close);
+            backdrop.addEventListener('click', close);
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') close();
+            });
+
+            // If the viewport grows past the breakpoint, drop the drawer state
+            const mq = window.matchMedia('(min-width: 1024px)');
+            const onChange = (e) => { if (e.matches) close(); };
+            if (mq.addEventListener) mq.addEventListener('change', onChange);
+            else if (mq.addListener) mq.addListener(onChange);
+        }
+
+        // 11. Initialization
+        async function initApp() {
+            renderGrid();
+            initChat();
+            initChatDrawer();
+            updateVoteBars();
+
+            // Initial fetch immediately on load
+            await fetchVotesFromRTDB();
+
+            // Refresh vote totals every 5 seconds
+            if (pollIntervalId) clearInterval(pollIntervalId);
+            pollIntervalId = setInterval(fetchVotesFromRTDB, 5000);
+        }
+
+        // Start on load
+        window.addEventListener('DOMContentLoaded', initApp);
+    </script>
+</body>
+</html>
