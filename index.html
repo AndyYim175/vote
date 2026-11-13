@@ -31,20 +31,27 @@
             white-space: nowrap;
         }
 
-        /* ---------- Cooldown bars (bottom → top, compositor-only) ---------- */
-        /* Both bars animate `transform` only, so no layout/paint thrash. */
-        .vote-bar,
-        .chat-cooldown-fill {
-            will-change: transform;
-            transform-origin: bottom center;
-            transform: scaleY(0);
-        }
-        .vote-bar {
-            position: absolute;
-            inset: 0;
-            background-color: rgba(229, 229, 229, 0.85); /* neutral-200 */
-            pointer-events: none;
-        }
+/* ---------- Cooldown bars (compositor-only) ---------- */
+.vote-bar,
+.chat-cooldown-fill {
+    will-change: transform;
+}
+
+/* vote: grows/drains bottom → top */
+.vote-bar {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(229, 229, 229, 0.85); /* neutral-200 */
+    pointer-events: none;
+    transform-origin: bottom center;
+    transform: scaleY(0);
+}
+
+        /* chat: fills right → left */
+.chat-cooldown-fill {
+    transform-origin: right center;
+    transform: scaleX(0);
+}
 
         /* ---------- Rolling counter ---------- */
         /* A tiny stacked grid: all values share one cell, so width is the
@@ -197,7 +204,10 @@
     <!-- Minimal Footer -->
     <footer class="w-full max-w-6xl px-4 sm:px-6 py-6 border-t border-neutral-200 text-xs text-neutral-400 flex flex-wrap justify-between items-center gap-4">
         <span>made by andy175 ;)</span>
-        <span id="user-vote-summary">no votes cast this session</span>
+        <div class="flex flex-wrap gap-x-5 gap-y-1">
+            <span id="user-vote-summary">votes this session: 0</span>
+            <span id="all-votes-summary">votes across all sections: 0</span>
+        </div>
     </footer>
 
     <!-- Mobile: floating button that opens the chat drawer -->
@@ -237,7 +247,7 @@
             {
                 id: 'other',
                 label: 'other',
-                items: [':|', ':I', ':1', ':3', ':/', ':\\', ':!', '?_?', ':7', ':#']
+                items: [':|', ':I', ':1', ':/', ':\\', ':!', '?_?', ':7', ':#']
             },
             {
                 id: 'sad',
@@ -536,15 +546,13 @@ function observeGridFit() {
 
             // Update session footer summary
             const summaryEl = document.getElementById('user-vote-summary');
-            const votedEntries = Object.entries(sessionVotes);
+            const allVotesSummaryEl = document.getElementById('all-votes-summary');
+            const totalSession = Object.values(sessionVotes).reduce((sum, count) => sum + count, 0);
             if (summaryEl) {
-                if (votedEntries.length === 0) {
-                    summaryEl.textContent = 'no votes cast this session';
-                } else {
-                    const topPick = votedEntries.sort((a, b) => b[1] - a[1])[0];
-                    const totalSession = votedEntries.reduce((sum, [, c]) => sum + c, 0);
-                    summaryEl.textContent = `you casted ${totalSession} vote${totalSession === 1 ? '' : 's'} (top: ${topPick[0]})`;
-                }
+                summaryEl.textContent = `votes this session: ${totalSession.toLocaleString()}`;
+            }
+            if (allVotesSummaryEl) {
+                allVotesSummaryEl.textContent = `votes across all sections: ${grandTotal.toLocaleString()}`;
             }
         }
 
@@ -776,7 +784,7 @@ function observeGridFit() {
                 chatMessagesEl.innerHTML = '<div class="text-neutral-400 text-center py-8">chat unavailable</div>';
             });
 
-            // Cooldown bar: fills the text box from the bottom up over 5s.
+            // Cooldown bar: fills the text box from right to left over 5s.
             function startChatCooldown() {
                 chatSendBtn.disabled = true;
 
@@ -785,7 +793,7 @@ function observeGridFit() {
                     chatFillAnim = null;
                 }
                 chatFillAnim = chatFillEl.animate(
-                    [{ transform: 'scaleY(0)' }, { transform: 'scaleY(1)' }],
+                    [{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }],
                     { duration: CHAT_COOLDOWN_MS, easing: BAR_EASE, fill: 'forwards' }
                 );
 
